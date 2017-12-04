@@ -3,10 +3,10 @@
 echo "Running analyze-vacuum utility"
 
 # Required
-DB=${DB:-}
-DB_USER=${DB_USER:-}
-DB_PWD=${DB_PWD:-}
-DB_HOST=${DB_HOST:-}
+DB=${DB:-$REDSHIFT_DB}
+DB_USER=${DB_USER:-$REDSHIFT_USER}
+DB_PWD=${DB_PWD:-$REDSHIFT_PASS}
+DB_HOST=${DB_HOST:-$REDSHIFT_HOST}
 
 # Optional with Defaults
 DB_PORT=${DB_PORT:-5439}
