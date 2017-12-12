@@ -11,9 +11,8 @@ import traceback
 goback_no_of_days = -1
 query_rank = 25
 
-
 # timeout for retries - 100ms
-RETRY_TIMEOUT = 100/1000
+RETRY_TIMEOUT = 100 / 1000
 
 OK = 0
 ERROR = 1
@@ -22,13 +21,30 @@ NO_WORK = 3
 TERMINATED_BY_USER = 4
 NO_CONNECTION = 5
 
+# default settings for parameters
+_schema_name = 'public'
+_query_slot_count = 1
+_ignore_errors = False
+_analyze_flag = True
+_vacuum_flag = True
+_vacuum_parameter = 'FULL'
+_require_ssl = False
+_predicate_cols = False
+_min_unsorted_pct = 5
+_max_unsorted_pct = 50
+_deleted_pct = 5
+_stats_off_pct = 10
+_max_table_size_mb = (700 * 1024)
+_min_interleaved_skew = 1.4
+_min_interleaved_cnt = 0
+
 
 def execute_query(conn, query):
     cursor = conn.cursor()
     cursor.execute(query)
     try:
         results = cursor.fetchall()
-        
+
         if debug:
             comment('Query Execution returned %s Results' % (len(results)))
     except pg8000.ProgrammingError as e:
@@ -36,7 +52,7 @@ def execute_query(conn, query):
             return None
         else:
             raise e
-        
+
     return results
 
 
@@ -77,18 +93,18 @@ def get_pg_conn(db_host, db_port, db, db_user, db_pwd, schema_name, query_group,
         comment('Connect %s:%s:%s:%s' % (db_host, db_port, db, db_user))
 
     try:
-        conn = pg8000.connect(user=db_user, 
-                              host=db_host, 
-                              port=int(db_port), 
-                              database=db, 
-                              password=db_pwd, 
+        conn = pg8000.connect(user=db_user,
+                              host=db_host,
+                              port=int(db_port),
+                              database=db,
+                              password=db_pwd,
                               ssl=ssl_option)
         conn.autocommit = True
     except Exception as e:
         print("Exception on Connect to Cluster: %s" % e)
         print('Unable to connect to Cluster Endpoint')
         cleanup(conn)
-        
+
         return None
 
     # set default search path
@@ -169,7 +185,7 @@ def run_vacuum(conn,
     if table_name is not None:
         get_vacuum_statement = '''SELECT 'vacuum %s ' + "schema" + '."' + "table" + '" ; '
                                                    + '/* '+ ' Table Name : ' + "schema" + '."' + "table"
-                                                   + '",  Size : ' + CAST("size" AS VARCHAR(10)) + ' MB,  Unsorted_pct : ' + decode("unsorted", null,'null') + ', Stats Off : ' + stats_off :: varchar(10)
+                                                   + '",  Size : ' + CAST("size" AS VARCHAR(10)) + ' MB,  Unsorted_pct : ' + coalesce(unsorted :: varchar(10),'null') + ', Stats Off : ' + stats_off :: varchar(10)
                                                    + ',  Deleted_pct : ' + CAST("empty" AS VARCHAR(10)) +' */ ;' as statement,
                                          "table" as table_name
                                         FROM svv_table_info
@@ -177,13 +193,14 @@ def run_vacuum(conn,
                                             AND   size < %s
                                             AND  "schema" = '%s'
                                             AND  "table" = '%s';
-                                        ''' % (vacuum_parameter,min_unsorted_pct,deleted_pct,stats_off_pct,max_table_size_mb,schema_name,table_name)
+                                        ''' % (
+            vacuum_parameter, min_unsorted_pct, deleted_pct, stats_off_pct, max_table_size_mb, schema_name, table_name)
 
     elif blacklisted_tables is not None:
         blacklisted_tables_array = blacklisted_tables.split(',')
         get_vacuum_statement = '''SELECT 'vacuum %s ' + "schema" + '."' + "table" + '" ; '
                                                    + '/* '+ ' Table Name : ' + "schema" + '."' + "table"
-                                                   + '",  Size : ' + CAST("size" AS VARCHAR(10)) + ' MB,  Unsorted_pct : ' + decode("unsorted", null,'null')
+                                                   + '",  Size : ' + CAST("size" AS VARCHAR(10)) + ' MB,  Unsorted_pct : ' + coalesce(unsorted :: varchar(10),'null')
                                                    + ',  Deleted_pct : ' + CAST("empty" AS VARCHAR(10)) +' */ ;' as statement,
                                          "table" as table_name
                                         FROM svv_table_info
@@ -191,14 +208,16 @@ def run_vacuum(conn,
                                             AND   size < %s
                                             AND  "schema" = '%s'
                                             AND  "table" NOT IN (%s);
-                                        ''' % (vacuum_parameter,min_unsorted_pct,deleted_pct,stats_off_pct,max_table_size_mb,schema_name,str(blacklisted_tables_array)[1:-1])
+                                        ''' % (
+            vacuum_parameter, min_unsorted_pct, deleted_pct, stats_off_pct, max_table_size_mb, schema_name,
+            str(blacklisted_tables_array)[1:-1])
 
     else:
         # query for all tables in the schema ordered by size descending
         comment("Extracting Candidate Tables for vacuum based on stl_alert_event_log...")
 
         get_vacuum_statement = '''
-                SELECT 'vacuum %s ' + feedback_tbl.schema_name + '."' + feedback_tbl.table_name + '" ; ' + '/* ' + ' Table Name : ' + info_tbl."schema" + '."' + info_tbl."table" + '",  Size : ' + CAST(info_tbl."size" AS VARCHAR(10)) + ' MB' + ',  Unsorted_pct : ' + decode(info_tbl."unsorted", null,'null') + ',  Deleted_pct : ' + CAST(info_tbl."empty" AS VARCHAR(10)) + ' */ ;' as statement,
+                SELECT 'vacuum %s ' + feedback_tbl.schema_name + '."' + feedback_tbl.table_name + '" ; ' + '/* ' + ' Table Name : ' + info_tbl."schema" + '."' + info_tbl."table" + '",  Size : ' + CAST(info_tbl."size" AS VARCHAR(10)) + ' MB' + ',  Unsorted_pct : ' + coalesce(unsorted :: varchar(10),'null') + ',  Deleted_pct : ' + CAST(info_tbl."empty" AS VARCHAR(10)) + ' */ ;' as statement,
                        table_name
                 FROM (SELECT schema_name,
                              table_name
@@ -219,7 +238,7 @@ def run_vacuum(conn,
                               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                             WHERE l.userid > 1
                             AND   l.event_time >= dateadd(DAY,%s,CURRENT_DATE)
-                            AND   l.Solution LIKE '%%VACUUM command%%'
+                            AND   regexp_instr(solution,'.*VACUUM.*') > 0
                             GROUP BY TRIM(n.nspname),
                                      TRIM(c.relname)) anlyz_tbl
                       WHERE anlyz_tbl.qry_rnk <%s) feedback_tbl
@@ -231,7 +250,9 @@ def run_vacuum(conn,
                 AND   TRIM(info_tbl.schema) = '%s'
                 ORDER BY info_tbl.size,
                          info_tbl.skew_rows
-                            ''' %(vacuum_parameter,goback_no_of_days,query_rank,min_unsorted_pct,deleted_pct,stats_off_pct,max_table_size_mb,schema_name,)
+                            ''' % (
+            vacuum_parameter, goback_no_of_days, query_rank, min_unsorted_pct, deleted_pct, stats_off_pct,
+            max_table_size_mb, schema_name,)
 
     if debug:
         comment(get_vacuum_statement)
@@ -256,7 +277,7 @@ def run_vacuum(conn,
         get_vacuum_statement = '''SELECT 'vacuum %s ' + "schema" + '."' + "table" + '" ; '
                                                    + '/* '+ ' Table Name : ' + "schema" + '."' + "table"
                                                    + '",  Size : ' + CAST("size" AS VARCHAR(10)) + ' MB'
-                                                   + ',  Unsorted_pct : ' + COALESCE(CAST(info_tbl."unsorted" AS VARCHAR(10)), 'N/A')
+                                                   + ',  Unsorted_pct : ' + coalesce(info_tbl.unsorted :: varchar(10),'N/A')
                                                    + ',  Deleted_pct : ' + CAST("empty" AS VARCHAR(10)) +' */ ;' as statement,
                                          info_tbl."table" as table_name
                                         FROM svv_table_info info_tbl
@@ -361,7 +382,7 @@ def run_analyze(conn, schema_name, table_name, ignore_errors, predicate_cols, st
                                                 WHERE   stats_off::DECIMAL (32,4) > %s ::DECIMAL (32,4)
                                                 AND  trim("schema") = '%s'
                                                 AND  trim("table") = '%s';
-                                                ''' % (predicate_cols_option,stats_off_pct,schema_name,table_name,)
+                                                ''' % (predicate_cols_option, stats_off_pct, schema_name, table_name,)
     else:
         # query for all tables in the schema
         comment("Extracting Candidate Tables for analyze based on Query Optimizer Alerts(Feedbacks) ...")
@@ -466,12 +487,11 @@ def run_analyze(conn, schema_name, table_name, ignore_errors, predicate_cols, st
             statements.append(vs[0])
 
         if not run_commands(conn, statements):
-                if not ignore_errors:
-                    if debug:
-                        print("Error running statements: %s" % (str(statements),))
-                        return ERROR
+            if not ignore_errors:
+                if debug:
+                    print("Error running statements: %s" % (str(statements),))
+                    return ERROR
     return True
-
 
 def run_analyze_vacuum(db_host,
                        db_port,
@@ -525,18 +545,18 @@ def run_analyze_vacuum(db_host,
     if vacuum_flag is True:
         # Run vacuum based on the Unsorted , Stats off and Size of the table
         run_vacuum(master_conn,
-                   schema_name,
+                   schema_name if schema_name is not None else _schema_name,
                    table_name,
                    blacklisted_tables,
-                   ignore_errors,
-                   vacuum_parameter,
-                   min_unsorted_pct,
-                   max_unsorted_pct,
-                   deleted_pct,
-                   stats_off_pct,
-                   max_table_size_mb,
-                   min_interleaved_skew,
-                   min_interleaved_cnt)
+                   ignore_errors if ignore_errors is not None else _ignore_errors,
+                   vacuum_parameter if vacuum_parameter is not None else _vacuum_parameter,
+                   min_unsorted_pct if min_unsorted_pct is not None else _min_unsorted_pct,
+                   max_unsorted_pct if max_unsorted_pct is not None else _max_unsorted_pct,
+                   deleted_pct if deleted_pct is not None else _deleted_pct,
+                   stats_off_pct if stats_off_pct is not None else _stats_off_pct,
+                   max_table_size_mb if max_table_size_mb is not None else _max_table_size_mb,
+                   min_interleaved_skew if min_interleaved_skew is not None else _min_interleaved_skew,
+                   min_interleaved_cnt if min_interleaved_cnt is not None else _min_interleaved_cnt)
     else:
         comment("Vacuum flag arg is set as %s. Vacuum is not performed." % vacuum_flag)
 
@@ -545,12 +565,18 @@ def run_analyze_vacuum(db_host,
             comment("Warning - Analyze without Vacuum may result in sub-optimal performance")
 
         # Run Analyze based on the  Stats off Metrics table
-        run_analyze(master_conn, schema_name, table_name, ignore_errors, predicate_cols, stats_off_pct)
+        run_analyze(master_conn,
+                    schema_name if schema_name is not None else _schema_name,
+                    table_name,
+                    ignore_errors if ignore_errors is not None else _ignore_errors,
+                    predicate_cols if predicate_cols is not None else _predicate_cols,
+                    stats_off_pct if stats_off_pct is not None else _stats_off_pct,
+                    )
     else:
         comment("Analyze flag arg is set as %s. Analyze is not performed." % analyze_flag)
 
     comment('Processing Complete')
-    
+
     cleanup(master_conn)
-    
+
     return OK
