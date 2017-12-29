@@ -35,7 +35,7 @@ SUPPRESS_CLOUDWATCH = "suppress_cw"
 MAX_TBL_SIZE_MB = "max_table_size_mb"
 MIN_INTERLEAVED_SKEW = "min_interleaved_skew"
 MIN_INTERLEAVED_COUNT = "min_interleaved_count"
-CMK_ALIAS = "cmk_alias"
+KMS_AUTH_CONTEXT = "kms_auth_context"
 
 config_aliases = {
     "db": ["db", "DatabaseName"],
@@ -106,7 +106,7 @@ def normalise_config(config):
     add_to_config(MAX_TBL_SIZE_MB)
     add_to_config(MIN_INTERLEAVED_SKEW)
     add_to_config(MIN_INTERLEAVED_COUNT)
-    add_to_config(CMK_ALIAS)
+    add_to_config(KMS_AUTH_CONTEXT)
 
     return config_out
 
