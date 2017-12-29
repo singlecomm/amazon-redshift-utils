@@ -91,6 +91,88 @@ docker run --net host --rm -it --env-file .env .... amazon-redshift-utils analyz
 
 Please see the [entrypoint scripts](src/bin/) for the environment variable configuration references that are needed.
 
+ Merge Instructions
+ ------------------
+ 
+ ### 1. Squash Merge
+ 
+ - When you land commits on our dev branch, select the Squash and Merge option.
+ 
+ 
+ ### 2. [Commit Message Convention](https://conventionalcommits.org/)
+ 
+ _patches:_
+ 
+ ```bash
+ git commit -a -m "fix(PET-123): fixed a bug in our parser"
+ ```
+ 
+ _features:_
+ 
+ ```bash
+ git commit -a -m "feat(PET-123): we now have a parser \o/"
+ ```
+ 
+ _breaking changes:_
+ 
+ ```bash
+ git commit -a -m "feat(PET-123): introduces a new parsing library
+ BREAKING CHANGE: new library does not support foo-construct"
+ ```
+ 
+ _other changes:_
+ 
+ You decide, e.g., docs, chore, etc.
+ 
+ ```bash
+ git commit -a -m "docs(PET-123): fixed up the docs a bit"
+ ```
+ 
+ _but wait, there's more!_
+ 
+ Github usernames (`@bcoe`) and issue references (#133) will be swapped out for the
+ appropriate URLs in your CHANGELOG.
+
+### 3. Pull dev and run a release
+
+For standard releases that have proper commit messages:
+
+```bash
+git checkout master
+git pull
+npm run release
+```
+
+Release as a pre-release:
+
+```bash
+npm run release -- --prerelease
+```
+
+Release as a pre-release w/ a tag (the below tags the version as _version_-alpha._pre-release version_, e.g. 1.0.1-alpha.0):
+
+```bash
+npm run release -- --prerelease alpha
+```
+
+Release as a minor, major or patch
+
+```bash
+npm run release -- --release-as minor
+# OR
+npm run release -- --release-as major
+# OR
+npm run release -- --release-as patch
+```
+
+Run in dry-run mode:
+
+```bash
+npm run release -- --dry-run
+```
+
+When you've tagged the version appropriately, push out the commit / tag to dev as v_versionNumber_, e.g. `v1.0.1`
+
 ----
 Copyright 2014 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 

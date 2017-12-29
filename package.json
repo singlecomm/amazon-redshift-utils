@@ -1,0 +1,18 @@
+{
+  "name": "amazon-redshift-utils",
+  "version": "1.0.2",
+  "description": "Utilities for Amazon Redshift",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/singlecomm/amazon-redshift-utils.git"
+  },
+  "private": false,
+  "scripts": {
+    "release": "standard-version"
+  },
+  "author": "Eric Meisel <eric.meisel@singlecomm.com",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "devDependencies": {
+    "standard-version": "^4.2.0"
+  }
+}

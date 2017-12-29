@@ -64,3 +64,7 @@ venv/
 # IDE's
 .project
 .idea
+*.iml
+
+# Node Modules, for standard-release
+node_modules/
