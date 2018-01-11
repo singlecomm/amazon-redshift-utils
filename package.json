@@ -1,6 +1,6 @@
 {
   "name": "amazon-redshift-utils",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Utilities for Amazon Redshift",
   "repository": {
     "type": "git",
