@@ -1,0 +1,68 @@
+pipeline {
+  agent none
+
+  stages {
+
+    stage('Check for Release') {
+      agent any
+      steps {
+        script {
+          RESULT = sh(
+            script: "git log -1 | grep 'chore(release)'",
+            returnStatus: true)
+
+          if( RESULT == 0 ) {
+            currentBuild.result = "NOT_BUILT"
+            error("Release tagged.  Not Built.")
+          }
+        }
+      }
+    }
+
+    stage('Stash'){
+      agent any
+      steps{
+        sh'''
+          git rev-parse HEAD > hash
+        '''
+        stash name:'dev_stash', includes: 'hash' //stores the commit head in a stash
+      }
+    }
+
+    stage ('Lint') { //checks if format is okay
+      agent any
+      steps {
+        unstash 'dev_stash' //unstashes the dev_stash
+        sh'''
+          git reset --hard $(cat hash)
+          echo "Nothing to lint..."
+        '''
+      }
+    }
+
+    stage('Testing') {
+      agent any
+      steps {
+        unstash 'dev_stash'
+        sh '''
+          git reset --hard $(cat hash)
+          echo "Nothing to test..."
+        '''
+      }
+    }
+
+    stage('Deploy Tag'){
+      agent any
+      steps{
+        unstash 'dev_stash'
+        sh '''
+          git checkout dev
+          git reset --hard $(cat hash)
+          npm install
+          npm run release
+          git push --follow-tags origin dev
+        '''
+      }
+    }
+  }
+}

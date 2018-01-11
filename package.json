@@ -8,6 +8,7 @@
   },
   "private": false,
   "scripts": {
+    "get-version": "node -pe \"require('./package.json')['version']\"",
     "release": "standard-version"
   },
   "author": "Eric Meisel <eric.meisel@singlecomm.com",

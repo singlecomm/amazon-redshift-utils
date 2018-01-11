@@ -1,0 +1,55 @@
+pipeline {
+  agent none
+
+  stages {
+
+    stage('Stash'){
+      agent any
+      steps{
+        sh'''
+          git checkout dev
+          git pull
+          git rev-parse HEAD > hash
+        '''
+        stash name:'dev_deploy_stash', includes: 'hash' //stores the commit head in a stash
+      }
+    }
+
+    stage('Kube Deployment'){
+      agent any
+      steps{
+        unstash 'dev_deploy_stash'
+
+        sh'''
+          git reset --hard $(cat hash)
+          git clone git@github.com:singlecomm/kubernetes-config.git -b "dev" "kubernetes-config-dev"
+          sed -i "s/singlecomm\/amazon-redshift-utils:v[0-9]\+.[0-9]\+.[0-9]\+/singlecomm\/amazon-redshift-utils:$TAG/" kubernetes-config-dev/dev-coral/cronjobs/analyze-vacuum-redshift.yml
+          kubectl --context="dev" --namespace="dev-coral" apply -f kubernetes-config-dev/dev-coral/cronjobs/analyze-vacuum-redshift.yml
+          cd kubernetes-config-dev
+          git add kubernetes-config-dev/dev-coral/cronjobs/analyze-vacuum-redshift.yml
+          git commit -m "chore(release): Amazon Redshift Utils Version $TAG"
+          git push origin dev
+        '''
+      }
+    }
+
+    stage('Merge to QA') {
+      agent any
+      steps {
+        sshagent(['SingleComm-Service-SSH-Github']) {
+
+        unstash 'dev_deploy_stash'
+
+        sh '''
+          git checkout dev
+          git reset --hard $(cat hash)
+          rm hash
+          git checkout qa
+          git merge dev
+          git push origin qa
+        '''
+        }
+      }
+    }
+  }
+}

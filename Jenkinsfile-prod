@@ -1,0 +1,58 @@
+pipeline {
+  agent none
+
+  environment {
+    STAGE = 'prod'
+  }
+
+  stages {
+
+    stage('Stash'){
+      agent any
+      steps{
+        sh'''
+          git rev-parse HEAD > hash
+        '''
+        stash name:'prod_stash', includes: 'hash' //stores the commit head in a stash
+      }
+    }
+
+    stage('Select for Production') {
+      agent none
+      steps {
+        timeout(time:5, unit:'DAYS') {
+          input id: 'deploy', message: 'Deploy to Production?'
+        }
+      }
+    }
+
+    stage ('Deploy to Production') {
+      agent any
+      steps {
+        unstash 'prod_stash' //unstashes the prod_stash
+        sh'''
+          git reset --hard $(cat hash)
+          export TAG="v$(npm run -s get-version)"
+          git clone git@github.com:singlecomm/kubernetes-config.git -b "master" "kubernetes-config-prod"
+          sed -i "s/singlecomm\/amazon-redshift-utils:v[0-9]\+.[0-9]\+.[0-9]\+/singlecomm\/amazon-redshift-utils:$TAG/" kubernetes-config-prod/prod-coral/cronjobs/analyze-vacuum-redshift.yml
+          kubectl --context="prod" --namespace="prod-coral" apply -f kubernetes-config-prod/prod-coral/cronjobs/analyze-vacuum-redshift.yml
+          cd kubernetes-config-prod
+          git add prod-coral/cronjobs/analyze-vacuum-redshift.yml
+          git commit -m "chore(release): Amazon Redshift Utils Version $TAG"
+          git push origin master
+        '''
+      }
+    }
+  }
+
+  post {
+    failure {
+      //if failure send a failure message
+      slackSend channel: '#alerts-ops-deploy', message: "FAILED Amazon Redshift Utils Prod deployment\n${env.JOB_NAME} #${env.BUILD_NUMBER}"
+    }
+    success {
+      //if successful send a success message
+      slackSend channel: '#alerts-ops-deploy', message: "SUCCESSFUL Amazon Redshift Utils Prod deployment\n${env.JOB_NAME} #${env.BUILD_NUMBER}"
+    }
+  }
+}

@@ -1,0 +1,81 @@
+pipeline {
+  agent none
+
+  stages {
+
+    stage('Stash'){
+      agent any
+      steps{
+        sh'''
+          git rev-parse HEAD > hash
+        '''
+        stash name:'qa_stash', includes: 'hash' //stores the commit head in a stash
+      }
+    }
+
+    stage('Select for QA') {
+      agent none
+      steps {
+        timeout(time:5, unit:'DAYS') {
+          input id: 'deploy', message: 'Deploy to QA?'
+        }
+      }
+    }
+
+    stage ('Deploy to QA') {
+      agent any
+      steps {
+        unstash 'qa_stash' //unstashes the qa_stash
+        sh'''
+          git reset --hard $(cat hash)
+          export TAG="v$(npm run -s get-version)"
+          git clone git@github.com:singlecomm/kubernetes-config.git -b "qa" "kubernetes-config-qa"
+          sed -i "s/singlecomm\/amazon-redshift-utils:v[0-9]\+.[0-9]\+.[0-9]\+/singlecomm\/amazon-redshift-utils:$TAG/" kubernetes-config-qa/qa-coral/cronjobs/analyze-vacuum-redshift.yml
+          kubectl --context="qa" --namespace="qa-coral" apply -f kubernetes-config-qa/qa-coral/cronjobs/analyze-vacuum-redshift.yml
+          cd kubernetes-config-qa
+          git add qa-coral/cronjobs/analyze-vacuum-redshift.yml
+          git commit -m "chore(release): Amazon Redshift Utils Version $TAG"
+          git push origin qa
+        '''
+      }
+    }
+
+    stage('Select for Staging') {
+      agent none
+      steps {
+        timeout(time:5, unit:'DAYS') {
+          input message: 'Stage for Production?'
+        }
+      }
+    }
+
+    stage('Stage') {
+      agent any
+      steps {
+        sshagent(['SingleComm-Service-SSH-Github']) {
+
+          unstash 'qa_stash' //unstashes the qa_stash
+          sh'''
+            git checkout qa
+            git reset --hard $(cat hash)
+            rm hash
+            git checkout master
+            git merge qa
+            git push origin master
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      //if failure send a failure message
+      slackSend channel: '#alerts-ops-deploy', message: "FAILED Amazon Redshift Utils QA deployment\n${env.JOB_NAME} #${env.BUILD_NUMBER}"
+    }
+    success {
+      //if successful send a success message
+      slackSend channel: '#alerts-ops-deploy', message: "SUCCESSFUL Amazon Redshift Utils QA deployment\n${env.JOB_NAME} #${env.BUILD_NUMBER}"
+    }
+  }
+}
