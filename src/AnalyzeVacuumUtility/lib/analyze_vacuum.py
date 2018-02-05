@@ -83,7 +83,7 @@ def print_statements(statements):
 
 
 def get_pg_conn(db_host, db, db_user, db_pwd, schema_name, db_port=5439, query_group=None, query_slot_count=1,
-                ssl_option=True, **kwargs):
+                ssl=True, **kwargs):
     conn = None
 
     if debug:
@@ -91,7 +91,7 @@ def get_pg_conn(db_host, db, db_user, db_pwd, schema_name, db_port=5439, query_g
 
     try:
         conn = pg8000.connect(user=db_user, host=db_host, port=int(db_port), database=db, password=db_pwd,
-                              ssl=ssl_option, timeout=None)
+                              ssl=ssl, timeout=None)
         conn.autocommit = True
     except Exception as e:
         print("Exception on Connect to Cluster: %s" % e)
@@ -197,7 +197,6 @@ def run_vacuum(conn,
                vacuum_parameter='FULL',
                min_unsorted_pct=5,
                max_unsorted_pct=50,
-               deleted_pct=5,
                stats_off_pct=10,
                max_table_size_mb=(700 * 1024),
                min_interleaved_skew=1.4,
@@ -207,30 +206,35 @@ def run_vacuum(conn,
 
     if table_name is not None:
         get_vacuum_statement = '''SELECT 'vacuum %s ' + "schema" + '."' + "table" + '" ; '
-                                                   + '/* Size : ' + CAST("size" AS VARCHAR(10)) + ' MB,  Unsorted_pct : ' + coalesce(unsorted :: varchar(10),'null') + ', Stats Off : ' + stats_off :: varchar(10)
-                                                   + ',  Deleted_pct : ' + CAST("empty" AS VARCHAR(10)) +' */ ;' as statement,
+                                         + '/* Size : ' + CAST("size" AS VARCHAR(10)) + ' MB'
+                                         + ', Unsorted_pct : ' + coalesce(unsorted :: varchar(10),'null') 
+                                         + ', Stats Off : ' + stats_off :: varchar(10)
+                                         + ' */ ;' as statement,
                                          "table" as table_name
-                                        FROM svv_table_info
-                                        WHERE (unsorted > %s OR empty > %s or stats_off > %s)
-                                            AND   size < %s
-                                            AND  "schema" = '%s'
-                                            AND  "table" = '%s';
+                                  FROM svv_table_info
+                                  WHERE (unsorted > %s or stats_off > %s)
+                                    AND   size < %s
+                                    AND  "schema" = '%s'
+                                    AND  "table" = '%s';
                                         ''' % (
-            vacuum_parameter, min_unsorted_pct, deleted_pct, stats_off_pct, max_table_size_mb, schema_name, table_name)
+            vacuum_parameter, min_unsorted_pct, stats_off_pct, max_table_size_mb, schema_name, table_name)
 
     elif blacklisted_tables is not None:
+        comment("Extracting Candidate Tables for vacuum based on stl_alert_event_log...")
         blacklisted_tables_array = blacklisted_tables.split(',')
         get_vacuum_statement = '''SELECT 'vacuum %s ' + "schema" + '."' + "table" + '" ; '
-                                                   + '/* Size : ' + CAST("size" AS VARCHAR(10)) + ' MB,  Unsorted_pct : ' + coalesce(unsorted :: varchar(10),'null')
-                                                   + ',  Deleted_pct : ' + CAST("empty" AS VARCHAR(10)) +' */ ;' as statement,
+                                         + '/* Size : ' + CAST("size" AS VARCHAR(10)) + ' MB'
+                                         + ', Unsorted_pct : ' + coalesce(unsorted :: varchar(10),'null')
+                                         + ', Stats Off : ' + stats_off :: varchar(10)
+                                         + ' */ ;' as statement,
                                          "table" as table_name
-                                        FROM svv_table_info
-                                        WHERE (unsorted > %s OR empty > %s or stats_off > %s)
-                                            AND   size < %s
-                                            AND  "schema" = '%s'
-                                            AND  "table" NOT IN (%s);
+                                  FROM svv_table_info
+                                  WHERE (unsorted > %s or stats_off > %s)
+                                    AND   size < %s
+                                    AND  "schema" = '%s'
+                                    AND  "table" NOT IN (%s);
                                         ''' % (
-            vacuum_parameter, min_unsorted_pct, deleted_pct, stats_off_pct, max_table_size_mb, schema_name,
+            vacuum_parameter, min_unsorted_pct, stats_off_pct, max_table_size_mb, schema_name,
             str(blacklisted_tables_array)[1:-1])
 
     else:
@@ -238,7 +242,11 @@ def run_vacuum(conn,
         comment("Extracting Candidate Tables for vacuum based on stl_alert_event_log...")
 
         get_vacuum_statement = '''
-                SELECT 'vacuum %s ' + feedback_tbl.schema_name + '."' + feedback_tbl.table_name + '" ; ' + '/* Size : ' + CAST(info_tbl."size" AS VARCHAR(10)) + ' MB' + ',  Unsorted_pct : ' + coalesce(unsorted :: varchar(10),'null') + ',  Deleted_pct : ' + CAST(info_tbl."empty" AS VARCHAR(10)) + ' */ ;' as statement,
+                SELECT 'vacuum %s ' + feedback_tbl.schema_name + '."' + feedback_tbl.table_name + '" ; ' 
+                       + '/* Size : ' + CAST(info_tbl."size" AS VARCHAR(10)) + ' MB' 
+                       + ', Unsorted_pct : ' + coalesce(unsorted :: varchar(10),'null') 
+                       + ', Stats Off : ' + stats_off :: varchar(10)
+                       + ' */ ;' as statement,
                        table_name
                 FROM (SELECT schema_name,
                              table_name
@@ -259,27 +267,25 @@ def run_vacuum(conn,
                               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                             WHERE l.userid > 1
                             AND   l.event_time >= dateadd(DAY,%s,CURRENT_DATE)
-                            AND   regexp_instr(solution,'.*VACUUM.*') > 0
+                            AND   regexp_instr(solution,'.*VACUUM.reclaim deleted.') > 0
                             GROUP BY TRIM(n.nspname),
                                      TRIM(c.relname)) anlyz_tbl
                       WHERE anlyz_tbl.qry_rnk <%s) feedback_tbl
                   JOIN svv_table_info info_tbl
                     ON info_tbl.schema = feedback_tbl.schema_name
                    AND info_tbl.table = feedback_tbl.table_name
-                WHERE (info_tbl.unsorted > %s OR info_tbl.empty > %s OR info_tbl.stats_off > %s)
+                WHERE (info_tbl.unsorted > %s OR info_tbl.stats_off > %s)
                 AND   info_tbl.size < %s
                 AND   TRIM(info_tbl.schema) = '%s'
                 ORDER BY info_tbl.size,
                          info_tbl.skew_rows
-                            ''' % (
-            vacuum_parameter,
-            goback_no_of_days,
-            query_rank,
-            min_unsorted_pct,
-            deleted_pct,
-            stats_off_pct,
-            max_table_size_mb,
-            schema_name)
+                            ''' % (vacuum_parameter,
+                                   goback_no_of_days,
+                                   query_rank,
+                                   min_unsorted_pct,
+                                   stats_off_pct,
+                                   max_table_size_mb,
+                                   schema_name)
 
     if debug:
         comment(get_vacuum_statement)
@@ -304,17 +310,17 @@ def run_vacuum(conn,
         get_vacuum_statement = '''SELECT 'vacuum %s ' + "schema" + '."' + "table" + '" ; '
                                                    + '/* Size : ' + CAST("size" AS VARCHAR(10)) + ' MB'
                                                    + ',  Unsorted_pct : ' + coalesce(info_tbl.unsorted :: varchar(10),'N/A')
-                                                   + ',  Deleted_pct : ' + CAST("empty" AS VARCHAR(10)) +' */ ;' as statement,
+                                                   + ' */ ;' as statement,
                                          info_tbl."table" as table_name
                                         FROM svv_table_info info_tbl
                                         WHERE "schema" = '%s'
                                                 AND
                                                  (
-                                                --If the size of the table is less than the max_table_size_mb then , run vacuum based on condition: >min_unsorted_pct AND >deleted_pct
-                                                    ((size < %s) AND (unsorted > %s OR empty > %s or stats_off > %s))
+                                                --If the size of the table is less than the max_table_size_mb then , run vacuum based on condition: >min_unsorted_pct
+                                                    ((size < %s) AND (unsorted > %s or stats_off > %s))
                                                     OR
                                                 --If the size of the table is greater than the max_table_size_mb then , run vacuum based on condition:
-                                                -- >min_unsorted_pct AND < max_unsorted_pct AND >deleted_pct
+                                                -- >min_unsorted_pct AND < max_unsorted_pct
                                                 --This is to avoid big table with large unsorted_pct
                                                      ((size > %s) AND (unsorted > %s AND unsorted < %s ))
                                                  )
@@ -323,7 +329,6 @@ def run_vacuum(conn,
                                                schema_name,
                                                max_table_size_mb,
                                                min_unsorted_pct,
-                                               deleted_pct,
                                                stats_off_pct,
                                                max_table_size_mb,
                                                min_unsorted_pct,
@@ -390,7 +395,13 @@ def run_vacuum(conn,
     return True
 
 
-def run_analyze(conn, cluster_name, cw, schema_name='public', table_name=None, ignore_errors=False,
+def run_analyze(conn,
+                cluster_name,
+                cw,
+                schema_name='public',
+                table_name=None,
+                blacklisted_tables=None,
+                ignore_errors=False,
                 predicate_cols=False,
                 stats_off_pct=10,
                 **kwargs):
@@ -410,6 +421,76 @@ def run_analyze(conn, cluster_name, cw, schema_name='public', table_name=None, i
                                                 AND  trim("schema") = '%s'
                                                 AND  trim("table") = '%s';
                                                 ''' % (predicate_cols_option, stats_off_pct, schema_name, table_name,)
+
+    elif blacklisted_tables is not None:
+        comment("Extracting Candidate Tables for analyze based on Query Optimizer Alerts...")
+
+        blacklisted_tables_array = blacklisted_tables.split(',')
+        get_analyze_statement_feedback = '''
+                                    SELECT DISTINCT 'analyze ' + feedback_tbl.schema_name + '."' + feedback_tbl.table_name + '"' + '%s ; ' + '/* Stats_Off : ' + CAST(info_tbl."stats_off" AS VARCHAR(10)) + ' */ ;'
+                                    FROM (/* Get top N rank tables based on the missing statistics alerts */
+                                         SELECT TRIM(n.nspname)::VARCHAR schema_name,
+                                                TRIM(c.relname)::VARCHAR table_name
+                                         FROM (SELECT TRIM(SPLIT_PART(SPLIT_PART(a.plannode,':',2),' ',2)) AS Table_Name,
+                                                      COUNT(a.query),
+                                                      DENSE_RANK() OVER (ORDER BY COUNT(a.query) DESC) AS qry_rnk
+                                               FROM stl_explain a,
+                                                    stl_query b
+                                               WHERE a.query = b.query
+                                               AND   CAST(b.starttime AS DATE) >= dateadd(DAY,%s,CURRENT_DATE)
+                                               AND   a.userid > 1
+                                               AND   regexp_instr(a.plannode,'.*missing statistics.*') > 0
+                                               AND   regexp_instr(a.plannode,'.*_bkp_.*') = 0
+                                               GROUP BY Table_Name) miss_tbl
+                                               LEFT JOIN pg_class c ON c.relname = TRIM(miss_tbl.table_name)
+                                               LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE miss_tbl.qry_rnk <= %s
+                                               /* Get the top N rank tables based on the stl_alert_event_log alerts */
+                                               UNION
+                                               SELECT schema_name,
+                                                      table_name
+                                               FROM (SELECT TRIM(n.nspname)::VARCHAR schema_name,
+                                                            TRIM(c.relname)::VARCHAR table_name,
+                                                            DENSE_RANK() OVER (ORDER BY COUNT(*) DESC) AS qry_rnk,
+                                                            COUNT(*)
+                                                     FROM stl_alert_event_log AS l
+                                                       JOIN (SELECT query,
+                                                                    tbl,
+                                                                    perm_table_name
+                                                             FROM stl_scan
+                                                             WHERE perm_table_name <> 'Internal Worktable'
+                                                             GROUP BY query,
+                                                                      tbl,
+                                                                      perm_table_name) AS s ON s.query = l.query
+                                                       JOIN pg_class c ON c.oid = s.tbl
+                                                       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                                                     WHERE l.userid > 1
+                                                     AND   l.event_time >= dateadd(DAY,%s,CURRENT_DATE)
+                                                     AND   regexp_instr(l.Solution,'.*ANALYZE command.*') > 0
+                                                     GROUP BY TRIM(n.nspname),
+                                                              TRIM(c.relname)) anlyz_tbl
+                                               WHERE anlyz_tbl.qry_rnk < %s
+                                               UNION
+                                               /* just a base dump of svv_table_info to check the stats_off metric */
+                                               SELECT "schema"::VARCHAR schema_name,
+                                                      "table"::VARCHAR table_name
+                                               FROM svv_table_info) feedback_tbl
+                                      JOIN svv_table_info info_tbl
+                                        ON info_tbl.schema = feedback_tbl.schema_name
+                                       AND info_tbl.table = feedback_tbl.table_name
+                                    WHERE info_tbl.stats_off::DECIMAL(32,4) > %s::DECIMAL(32,4)
+                                    AND   TRIM(info_tbl.schema) = '%s'
+                                    AND   info_tbl.table NOT IN (%s)
+                                    ORDER BY info_tbl.size ASC;
+                            ''' % (predicate_cols_option,
+                                   goback_no_of_days,
+                                   query_rank,
+                                   goback_no_of_days,
+                                   query_rank,
+                                   stats_off_pct,
+                                   schema_name,
+                                   str(blacklisted_tables_array)[1:-1],)
+
+
     else:
         # query for all tables in the schema
         comment("Extracting Candidate Tables for analyze based on Query Optimizer Alerts...")
@@ -495,13 +576,28 @@ def run_analyze(conn, cluster_name, cw, schema_name='public', table_name=None, i
     if table_name is None:
         comment("Extracting Candidate Tables for analyze based on stats off from system table info ...")
 
-        get_analyze_statement = '''SELECT DISTINCT 'analyze ' + "schema" + '."' + "table" + '" %s ; '
-                                        + '/* Stats_Off : ' + CAST("stats_off" AS VARCHAR(10)) + ' */ ;'
-                                        FROM svv_table_info
-                                        WHERE   stats_off::DECIMAL (32,4) > %s::DECIMAL (32,4)
-                                        AND  trim("schema") = '%s'
-                                        ORDER BY "size" ASC ;
-                                        ''' % (predicate_cols_option, stats_off_pct, schema_name)
+        if blacklisted_tables is not None:
+            blacklisted_tables_array = blacklisted_tables.split(',')
+            get_analyze_statement = '''SELECT DISTINCT 'analyze ' + "schema" + '."' + "table" + '" %s ; '
+                                            + '/* Stats_Off : ' + CAST("stats_off" AS VARCHAR(10)) + ' */ ;'
+                                            FROM svv_table_info
+                                            WHERE   stats_off::DECIMAL (32,4) > %s::DECIMAL (32,4)
+                                            AND  trim("schema") = '%s'
+                                            AND "table" NOT IN (%s)
+                                            ORDER BY "size" ASC ;
+                                            ''' % (predicate_cols_option,
+                                                   stats_off_pct,
+                                                   schema_name,
+                                                   str(blacklisted_tables_array)[1:-1],
+                                                   )
+        else:
+            get_analyze_statement = '''SELECT DISTINCT 'analyze ' + "schema" + '."' + "table" + '" %s ; '
+                                            + '/* Stats_Off : ' + CAST("stats_off" AS VARCHAR(10)) + ' */ ;'
+                                            FROM svv_table_info
+                                            WHERE   stats_off::DECIMAL (32,4) > %s::DECIMAL (32,4)
+                                            AND  trim("schema") = '%s'
+                                            ORDER BY "size" ASC ;
+                                            ''' % (predicate_cols_option, stats_off_pct, schema_name)
 
         if debug:
             comment(get_analyze_statement)
@@ -568,22 +664,22 @@ def run_analyze_vacuum(**kwargs):
                               kwargs[config_constants.DB_PASSWORD],
                               kwargs[config_constants.SCHEMA_NAME],
                               kwargs[config_constants.DB_PORT],
-                              None if 'query_group' not in kwargs else kwargs['query_group'],
-                              None if 'query_slot_count' not in kwargs else kwargs['query_slot_count'],
-                              None if 'ssl_option' not in kwargs else kwargs['ssl_option'])
+                              None if config_constants.QUERY_GROUP not in kwargs else kwargs[config_constants.QUERY_GROUP],
+                              None if config_constants.QUERY_SLOT_COUNT not in kwargs else kwargs[config_constants.QUERY_SLOT_COUNT],
+                              None if config_constants.SSL not in kwargs else kwargs[config_constants.SSL])
 
     if master_conn is None:
         raise Exception("No Connection was established")
 
     vacuum_flag = kwargs[config_constants.DO_VACUUM] if config_constants.DO_VACUUM in kwargs else False
-    if vacuum_flag:
+    if vacuum_flag is True:
         # Run vacuum based on the Unsorted , Stats off and Size of the table
         run_vacuum(master_conn, cluster_name, cw, **kwargs)
     else:
         comment("Vacuum flag arg is not set. Vacuum not performed.")
 
     analyze_flag = kwargs[config_constants.DO_ANALYZE] if config_constants.DO_ANALYZE in kwargs else False
-    if analyze_flag:
+    if analyze_flag is True:
         if not vacuum_flag:
             comment("Warning - Analyze without Vacuum may result in sub-optimal performance")
 
