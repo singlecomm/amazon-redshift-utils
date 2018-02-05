@@ -9,9 +9,12 @@ Parameters:
     Description: Utility to run with this instance of the Scheduled Event
     Type: String
     AllowedValues:
+      - Analyze
+      - Vacuum
       - AnalyzeVacuumUtility
       - ColumnEncodingUtility
       - Monitoring
+      - SystemTablePersistence
   S3ConfigPath:
     Default: s3://my-bucket/prefix/config-file.json
     Description: Configuration File for this Utility instance

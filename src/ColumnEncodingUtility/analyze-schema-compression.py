@@ -42,6 +42,7 @@ import os
 import re
 import sys
 import traceback
+import socket
 from multiprocessing import Pool
 
 import boto3
@@ -82,7 +83,7 @@ def get_env_var(name, default_value):
 
 
 db_connections = {}
-db_name = get_env_var('PGDATABASE', None)
+db = get_env_var('PGDATABASE', None)
 db_user = get_env_var('PGUSER', None)
 db_pwd = None
 db_host = get_env_var('PGHOST', None)
@@ -93,7 +94,7 @@ table_name = None
 new_dist_key = None
 new_sort_keys = None
 debug = False
-threads = 2
+threads = 1
 analyze_col_width = False
 do_execute = False
 query_slot_count = 1
@@ -104,12 +105,13 @@ comprows = None
 query_group = None
 ssl = False
 suppress_cw = None
+cw = None
 
 
-def execute_query(str):
+def execute_query(string):
     conn = get_pg_conn()
     cursor = conn.cursor()
-    cursor.execute(str)
+    cursor.execute(string)
 
     try:
         results = cursor.fetchall()
@@ -127,7 +129,8 @@ def close_conn(conn):
         conn.close()
     except Exception as e:
         if debug:
-            print(e)
+            if 'connection is closed' not in str(e):
+                print(e)
 
 
 def cleanup(conn):
@@ -175,6 +178,10 @@ def get_pg_conn():
         try:
             conn = pg8000.connect(user=db_user, host=db_host, port=db_port, database=db, password=db_pwd,
                                   ssl=ssl, timeout=None)
+            # Enable keepalives manually untill pg8000 supports it
+            # For future reference: https://github.com/mfenniak/pg8000/issues/149
+            # TCP keepalives still need to be configured appropriately on OS level as well
+            conn._usock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         except Exception as e:
             print(e)
             print('Unable to connect to Cluster Endpoint')
@@ -436,7 +443,7 @@ def analyze(table_info):
                     analyze_compression_result = execute_query(statement)
                 except KeyboardInterrupt:
                     # To handle Ctrl-C from user
-                    cleanup(conn)
+                    cleanup(get_pg_conn())
                     return TERMINATED_BY_USER
                 except Exception as e:
                     print(e)
@@ -502,7 +509,7 @@ def analyze(table_info):
                 if analyze_col_width and "character varying" in col_type:
                     curr_col_length = int(re.search(r'\d+', col_type).group())
                     if curr_col_length > 255:
-                        col_len_statement = 'select /* computing max column length */ max(len(%s)) from %s."%s"' % (
+                        col_len_statement = 'select /* computing max column length */ max(len("%s")) from %s."%s"' % (
                             descr[col][0], schema_name, table_name)
                         try:
                             if debug:
@@ -521,7 +528,7 @@ def analyze(table_info):
                                     col_len_result = execute_query(col_len_statement)
                                 except KeyboardInterrupt:
                                     # To handle Ctrl-C from user
-                                    cleanup(conn)
+                                    cleanup(get_pg_conn())
                                     return TERMINATED_BY_USER
                                 except Exception as e:
                                     print(e)
@@ -558,7 +565,7 @@ def analyze(table_info):
 
                 # check whether number columns are too wide
                 if analyze_col_width and "int" in col_type:
-                    col_len_statement = 'select max(%s) from %s."%s"' % (descr[col][0], schema_name, table_name)
+                    col_len_statement = 'select max("%s") from %s."%s"' % (descr[col][0], schema_name, table_name)
                     try:
                         if debug:
                             comment(col_len_statement)
@@ -575,7 +582,7 @@ def analyze(table_info):
                                 col_len_result = execute_query(col_len_statement)
                             except KeyboardInterrupt:
                                 # To handle Ctrl-C from user
-                                cleanup(conn)
+                                cleanup(get_pg_conn())
                                 return TERMINATED_BY_USER
                             except Exception as e:
                                 print(e)
@@ -594,8 +601,9 @@ def analyze(table_info):
                             return ERROR
 
                         if debug:
-                            comment("Max of column '%s' for table '%s.%s' is %d. Current column type is %s." % (
-                                descr[col][0], schema_name, table_name, col_len_result[0][0], col_type))
+                            maxlen = col_len_result[0][0] if col_len_result else 'not defined'
+                            comment("Max of column '%s' for table '%s.%s' is %s. Current column type is %s." % (
+                                descr[col][0], schema_name, table_name, maxlen, col_type))
 
                         # Test to see if largest value is smaller than largest value of smallint (2 bytes)
                         if col_len_result[0][0] <= int(math.pow(2, 15) - 1) and col_type != "smallint":
@@ -753,7 +761,9 @@ def analyze(table_info):
                                                                             schema_name,
                                                                             table_name)
                 if len(table_sortkeys) > 0:
-                    insert = "%s order by %s" % (insert, ",".join(table_sortkeys))
+                    insert = "%s order by %s;" % (insert, ",".join(table_sortkeys))
+                else:
+                    insert = "%s;" % (insert)
 
                 statements.extend([insert])
 
@@ -832,7 +842,6 @@ def usage(with_message):
         '           --target-schema       - Name of a Schema into which the newly optimised tables and data should be created, rather than in place')
     print('           --threads             - The number of concurrent connections to use during analysis (default 2)')
     print('           --output-file         - The full path to the output file to be generated')
-    print('           --report-file         - The full path to the report file to be generated')
     print('           --debug               - Generate Debug Output including SQL Statements being run')
     print('           --do-execute          - Run the compression encoding optimisation')
     print('           --slot-count          - Modify the wlm_query_slot_count from the default of 1')
@@ -851,7 +860,7 @@ def usage(with_message):
 # method used to configure global variables, so that we can call the run method
 def configure(**kwargs):
     # setup globals
-    global db_name
+    global db
     global db_user
     global db_pwd
     global db_host
@@ -873,9 +882,10 @@ def configure(**kwargs):
     global query_group
     global ssl
     global suppress_cw
+    global cw
 
     # set variables
-    for key, value in kwargs.iteritems():
+    for key, value in kwargs.items():
         setattr(thismodule, key, value)
 
         if debug:
@@ -929,6 +939,17 @@ def run():
     else:
         pass
 
+    # process the table name to support multiple items
+    tables = ""
+    if table_name is not None and ',' in table_name:
+        for t in table_name.split(','):
+            tables = tables + "'" + t + "',"
+
+        tables = tables[:-1]
+    else:
+        tables = "'" + table_name + "'"
+
+
     if table_name is not None:
         statement = '''select trim(a.name) as table, b.mbytes, a.rows, decode(pgc.reldiststyle,0,'EVEN',1,'KEY',8,'ALL') dist_style, TRIM(pgu.usename) "owner", pgd.description
 from (select db_id, id, name, sum(rows) as rows from stv_tbl_perm a group by db_id, id, name) as a
@@ -938,8 +959,8 @@ join pg_namespace as pgn on pgn.oid = pgc.relnamespace
 join pg_user pgu on pgu.usesysid = pgc.relowner
 join (select tbl, count(*) as mbytes
 from stv_blocklist group by tbl) b on a.id=b.tbl
-and pgn.nspname = '%s' and pgc.relname = '%s'        
-        ''' % (schema_name, table_name)
+and pgn.nspname = '%s' and pgc.relname in (%s)        
+        ''' % (schema_name, tables)
     else:
         # query for all tables in the schema ordered by size descending
         comment("Extracting Candidate Table List...")
@@ -1043,7 +1064,7 @@ order by 2;
 
 
 def main(argv):
-    supported_args = """db= db-user= db-pwd= db-host= db-port= target-schema= analyze-schema= analyze-table= new-dist-key= new-sort-keys= analyze-cols= threads= debug= output-file= report-file= do-execute= slot-count= ignore-errors= force= drop-old-data= comprows= query_group= ssl-option= suppress-cloudwatch="""
+    supported_args = """db= db-user= db-pwd= db-host= db-port= target-schema= analyze-schema= analyze-table= new-dist-key= new-sort-keys= analyze-cols= threads= debug= output-file= do-execute= slot-count= ignore-errors= force= drop-old-data= comprows= query_group= ssl-option= suppress-cloudwatch="""
 
     # extract the command line arguments
     try:
@@ -1142,7 +1163,7 @@ def main(argv):
             else:
                 args[config_constants.SUPPRESS_CLOUDWATCH] = False
         else:
-            assert False, "Unsupported Argument " + arg
+            print("Unsupported Argument " + arg)
             usage()
 
     # Validate that we've got all the args needed
