@@ -54,14 +54,16 @@ pipeline {
     stage('Deploy Tag'){
       agent any
       steps{
-        unstash 'dev_stash'
-        sh '''
-          git checkout dev
-          git reset --hard $(cat hash)
-          npm install
-          npm run release
-          git push --follow-tags origin dev
-        '''
+        sshagent(['SingleComm-Service-SSH-Github']) {
+          unstash 'dev_stash'
+          sh '''
+            git checkout dev
+            git reset --hard $(cat hash)
+            npm install
+            npm run release
+            git push --follow-tags origin dev
+          '''
+        }
       }
     }
   }

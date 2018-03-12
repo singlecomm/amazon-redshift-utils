@@ -6,11 +6,13 @@ pipeline {
     stage('Stash'){
       agent any
       steps{
-        sh'''
-          git checkout dev
-          git pull
-          git rev-parse HEAD > hash
-        '''
+        sshagent(['SingleComm-Service-SSH-Github']) {
+          sh'''
+            git checkout dev
+            git pull
+            git rev-parse HEAD > hash
+          '''
+        }
         stash name:'dev_deploy_stash', includes: 'hash' //stores the commit head in a stash
       }
     }
