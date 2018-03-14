@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+<a name="1.1.0"></a>
+# [1.1.0](https://github.com/singlecomm/amazon-redshift-utils/compare/v1.0.10...v1.1.0) (2018-03-14)
+
+
+### Features
+
+* Updates from AWS master branch ([da65825](https://github.com/singlecomm/amazon-redshift-utils/commit/da65825))
+
+
+
 <a name="1.0.10"></a>
 ## [1.0.10](https://github.com/singlecomm/amazon-redshift-utils/compare/v1.0.9...v1.0.10) (2018-03-14)
 
