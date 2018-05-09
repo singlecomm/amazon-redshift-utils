@@ -52,6 +52,8 @@ def event_handler(event, context):
 
     config = common.get_config(config_location, current_region)
 
+    debug = False
+    
     if config_constants.DEBUG in config and config[config_constants.DEBUG]:
         debug = True
 
